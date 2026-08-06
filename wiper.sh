@@ -22,6 +22,10 @@ while getopts ":hsr:" opt; do
         r )
             ROUNDS=$OPTARG
             ;;
+        \? )
+            echo "Unknown option: -$OPTARG" >&2
+            exit 1
+            ;;
     esac
 done
 
@@ -32,12 +36,12 @@ function sighdl {
     fi
     exit 0
 }
-trap sighdl SIGKILL SIGINT SIGTERM
+trap sighdl SIGINT SIGTERM
 
 function progress_bar {
-    let _progress=(${1}*100/${2}*100)/100
-    let _done=(${_progress}*4)/10
-    let _left=40-$_done
+    (( _progress = (${1} * 100 / ${2} * 100) / 100 ))
+    (( _done = (_progress * 4) / 10 ))
+    (( _left = 40 - _done ))
 
     _fill=$(printf "%${_done}s")
     _empty=$(printf "%${_left}s")
@@ -58,7 +62,7 @@ for i in $(seq 1 $ROUNDS); do
     cat $SOURCE > x.file 2> /dev/null &
     PID=$!
     sleep 0.5
-    while [ $(ps -p $PID | wc -l) -eq 2 ]; do
+    while [ "$(ps -p "$PID" | wc -l)" -eq 2 ]; do
         _current=`du -k x.file | cut -f1`
         progress_bar ${_current} ${_end}
         sleep 0.5
