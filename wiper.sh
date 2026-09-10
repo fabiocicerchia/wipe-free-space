@@ -1,4 +1,8 @@
-#!/bin/bash
+#!/bin/sh
+# POSIX sh, deliberately: free space is most often wiped inside a minimal
+# container image, and those ship busybox ash rather than bash. `function`,
+# `(( ))` and `${var// /x}` are bash syntax that ash cannot even parse, so the
+# script died on a syntax error at line 42 before wiping anything.
 
 ROUNDS=1
 SOURCE=/dev/zero
@@ -29,50 +33,62 @@ while getopts ":hsr:" opt; do
     esac
 done
 
-function sighdl {
+sighdl() {
     echo "*** SIGNAL CAUGHT ***"
-    if [ $PID -gt 0 ]; then
-        kill -9 $PID
+    # -n, not -gt: PID is empty until the first round starts, and `[ -gt 0 ]`
+    # is a syntax error rather than a false.
+    if [ -n "$PID" ]; then
+        kill -9 "$PID" 2>/dev/null
     fi
     exit 0
 }
-trap sighdl SIGINT SIGTERM
+# INT/TERM without the SIG prefix: that spelling is the portable one.
+trap sighdl INT TERM
 
-function progress_bar {
-    (( _progress = (${1} * 100 / ${2} * 100) / 100 ))
-    (( _done = (_progress * 4) / 10 ))
-    (( _left = 40 - _done ))
+progress_bar() {
+    _progress=$(( ($1 * 100 / $2 * 100) / 100 ))
+    _done=$(( (_progress * 4) / 10 ))
+    _left=$(( 40 - _done ))
 
-    _fill=$(printf "%${_done}s")
-    _empty=$(printf "%${_left}s")
+    # tr rather than ${_fill// /#}: pattern substitution is a bash extension,
+    # and busybox only has it when compiled in.
+    _fill=$(printf "%${_done}s" | tr ' ' '#')
+    _empty=$(printf "%${_left}s" | tr ' ' '-')
 
-    printf "\rProgress : [${_fill// /#}${_empty// /-}] ${_progress}%%"
+    # The bar goes through printf's arguments, never its format string: a `%`
+    # arriving in the data would otherwise be read as a conversion.
+    printf '\rProgress : [%s%s] %s%%' "$_fill" "$_empty" "$_progress"
 }
 
 echo "Wiping..."
 
-for i in $(seq 1 $ROUNDS); do
+i=1
+while [ "$i" -le "$ROUNDS" ]; do
     echo "ROUND #$i / $ROUNDS"
 
     dd if=$SOURCE of=x.small.file bs=1024 count=102400
     shred -vz x.small.file
 
-    _start=1
-    _end=`df -k . | tail -n1 | awk '{print $4}'` # FREE SPACE ON DISK
+    _end=$(df -k . | tail -n1 | awk '{print $4}') # FREE SPACE ON DISK
     cat $SOURCE > x.file 2> /dev/null &
     PID=$!
     sleep 0.5
-    while [ "$(ps -p "$PID" | wc -l)" -eq 2 ]; do
-        _current=`du -k x.file | cut -f1`
-        progress_bar ${_current} ${_end}
+    # `kill -0` rather than `ps -p`: busybox ps has no -p, so the old test
+    # counted the lines of an error message and left the loop immediately.
+    while kill -0 "$PID" 2>/dev/null; do
+        _current=$(du -k x.file | cut -f1)
+        progress_bar "${_current}" "${_end}"
         sleep 0.5
     done
+    echo
 
     sync
     rm x.small.file
     shred -vz x.file
     sync
     rm x.file
+
+    i=$((i + 1))
 done
 
 echo "Done"
